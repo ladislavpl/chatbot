@@ -53,6 +53,7 @@ Thumbs.db
 # Databáze
 # chroma_db je umístěna v chat-api/ (sdílená oběma komponentami)
 chat-api/chroma_db/
+vfiles
 # Stará umístění (pro případ mígrace nebo lokálního testování)
 data-vectorizer/chroma_db/
 chroma_db/

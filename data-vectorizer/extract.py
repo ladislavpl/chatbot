@@ -1,4 +1,6 @@
 import os
+import hashlib
+from pathlib import Path
 
 import mysql.connector
 from dotenv import load_dotenv
@@ -96,7 +98,91 @@ def extract_data():
     print(f"Úspěšně extrahováno celkem {len(extracted_docs)} záznamů.")
     return extracted_docs
 
+
+def _file_id(filepath: Path) -> str:
+    """Vytvoří stabilní ID souboru z jeho cesty (relativní k FILES_DIR)."""
+    return "file_" + hashlib.md5(str(filepath).encode()).hexdigest()
+
+
+def extract_files() -> list[dict]:
+    """
+    Prochází složku FILES_DIR (z .env) a extrahuje obsah PDF a HTML souborů.
+    Vrací seznam slovníků stejného formátu jako extract_data():
+    [{'id': ..., 'url': ..., 'type': ..., 'content': ..., 'source': 'file'}]
+    """
+    files_dir = os.getenv("FILES_DIR", "")
+    if not files_dir:
+        return []
+
+    base = Path(files_dir)
+    if not base.is_dir():
+        print(f"[files] Složka {base} neexistuje, přeskakuji.")
+        return []
+
+    # Lazy import – knihovny nemusí být nainstalované, pokud se soubory nepoužívají
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        PdfReader = None  # type: ignore
+
+    try:
+        from bs4 import BeautifulSoup as _BS
+    except ImportError:
+        _BS = None  # type: ignore
+
+    extracted_docs = []
+    supported = {".pdf", ".html", ".htm"}
+
+    for filepath in sorted(base.rglob("*")):
+        if filepath.suffix.lower() not in supported or not filepath.is_file():
+            continue
+
+        rel = filepath.relative_to(base)
+        doc_id = _file_id(rel)
+        url = str(rel).replace("\\", "/")
+        content = ""
+
+        try:
+            if filepath.suffix.lower() == ".pdf":
+                if PdfReader is None:
+                    print(f"[files] Přeskakuji {rel} – knihovna pypdf není nainstalována.")
+                    continue
+                reader = PdfReader(str(filepath))
+                pages = [page.extract_text() or "" for page in reader.pages]
+                content = "\n\n".join(pages)
+                doc_type = "pdf"
+
+            else:  # .html / .htm
+                if _BS is None:
+                    print(f"[files] Přeskakuji {rel} – knihovna beautifulsoup4 není nainstalována.")
+                    continue
+                raw = filepath.read_text(encoding="utf-8", errors="replace")
+                # Obsah předáme jako surové HTML – transform.py ho vyčistí
+                content = raw
+                doc_type = "html_file"
+
+        except Exception as e:
+            print(f"[files] Chyba při čtení {rel}: {e}")
+            continue
+
+        if content.strip():
+            extracted_docs.append({
+                'id': doc_id,
+                'url': url,
+                'type': doc_type,
+                'content': content,
+                'source': 'file',
+            })
+            print(f"[files] Načteno: {rel} ({doc_type})")
+
+    print(f"[files] Celkem načteno {len(extracted_docs)} souborů.")
+    return extracted_docs
+
+
 if __name__ == "__main__":
     docs = extract_data()
     if docs:
         print("Ukázka prvního záznamu:", docs[0])
+    file_docs = extract_files()
+    if file_docs:
+        print("Ukázka prvního souboru:", file_docs[0])

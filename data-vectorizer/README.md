@@ -1,6 +1,14 @@
 # Datový Vektorizátor – ETL Pipeline pro AI Chatbot
 
-Tato složka obsahuje nezávislou komponentu pro **ETL (Extract, Transform, Load)** proces. Slouží k automatizovanému stažení textového obsahu z existující MySQL databáze webu, jeho vyčištění, segmentaci na logické bloky (**chunky**) a následné vektorizaci (**embeddings**) pomocí lokálního AI modelu. Výsledek se ukládá do lokální vektorové databáze **ChromaDB**.
+Tato složka obsahuje nezávislou komponentu pro **ETL (Extract, Transform, Load)** proces. Slouží k automatizovanému zpracování textového obsahu, jeho vyčištění, segmentaci na logické bloky (**chunky**) a následné vektorizaci (**embeddings**) pomocí lokálního AI modelu. Výsledek se ukládá do lokální vektorové databáze **ChromaDB**.
+
+Podporované zdroje dat – lze kombinovat libovolně:
+
+| Zdroj | Kdy se aktivuje |
+|---|---|
+| **MySQL databáze** (CMS) | `DB_NAME` je vyplněno v `.env` |
+| **PDF soubory** | `FILES_DIR` ukazuje na složku s `.pdf` soubory |
+| **HTML soubory** | `FILES_DIR` ukazuje na složku s `.html` / `.htm` soubory |
 
 Tato data jsou připravena pro integraci s `chat-api`, kde chatbot bude moci v databázi **sémanticky vyhledávat** – tzn. najít obsah podle *smyslu* dotazu, nikoli jen klíčových slov.
 
@@ -9,23 +17,22 @@ Tato data jsou připravena pro integraci s `chat-api`, kde chatbot bude moci v d
 ## Jak ETL pipeline funguje
 
 ```
-MySQL (CMS databáze)
-       │
-       ▼
-  [extract.py]   ← SQL SELECT z tabulek cms_article, cms_page a jejich modulů
-       │           Výstup: [{'id': '...', 'url': '...', 'content': '<HTML>'}]
-       │
-       ▼
- [transform.py]  ← 1. Odstranění HTML tagů (BeautifulSoup)
-       │           2. Rozdělení textu na chunky (LangChain RecursiveCharacterTextSplitter)
-       │           Výstup: [{'id': '...', 'text': '...čistý text...', 'metadata': {...}}]
-       │
-       ▼
-   [load.py]     ← Vektorizace textu (HuggingFace model multilingual-e5-small)
-       │           Uložení vektorů + textu + metadata do ChromaDB
-       │
-       ▼
- chroma_db/      ← Lokální souborová vektorová databáze (připravena pro chatbota)
+  MySQL (CMS)        PDF / HTML soubory
+      │                      │
+      ▼                      ▼
+  extract_data()      extract_files()       ← extract.py
+      │                      │
+      └──────────┬───────────┘
+                 │  all_data (spojená data z obou zdrojů)
+                 ▼
+          [transform.py]  ← 1. Odstranění HTML tagů (BeautifulSoup)
+                 │          2. Rozdělení textu na chunky (LangChain RecursiveCharacterTextSplitter)
+                 │          Výstup: [{'id': '...', 'text': '...čistý text...', 'metadata': {...}}]
+                 ▼
+            [load.py]     ← Vektorizace textu (HuggingFace model multilingual-e5-small)
+                 │          Uložení vektorů + textu + metadata do ChromaDB
+                 ▼
+           chroma_db/     ← Lokální souborová vektorová databáze (připravena pro chatbota)
 ```
 
 ---
@@ -35,14 +42,15 @@ MySQL (CMS databáze)
 ```
 data-vectorizer/
 ├── main.py           ← Spouštěč: volá extract → transform → load v pořadí
-├── extract.py        ← Extrakce dat z MySQL přes python-mysql-connector
+├── extract.py        ← Extrakce dat z MySQL (extract_data) a souborů (extract_files)
 ├── transform.py      ← Čištění HTML + chunking textu
 ├── load.py           ← Vektorizace + upsert do ChromaDB
 ├── test_query.py     ← Interaktivní REPL pro testování sémantického vyhledávání
 ├── requirements.txt  ← Seznam Python závislostí s fixovanými verzemi
 ├── .env.example      ← Šablona konfiguračního souboru (zkopírujte na .env)
-├── .env              ← Přístupové údaje k DB (NENÍ v Gitu!)
+├── .env              ← Přístupové údaje a konfigurace (NENÍ v Gitu!)
 ├── db-structure.md   ← Schéma MySQL tabulek, ze kterých se čerpají data
+├── files/            ← (volitelné) Sem vložte PDF / HTML soubory ke vektorizaci
 └── chroma_db/        ← Složka s lokální ChromaDB (generovaná, NENÍ v Gitu)
 ```
 
@@ -119,38 +127,71 @@ pip install -r requirements.txt
 | `chromadb` | 0.5.15 | Lokální vektorová databáze |
 | `sentence-transformers` | 3.3.1 | Inference AI embedding modelu |
 | `beautifulsoup4` | 4.12.3 | Parsování a čištění HTML |
-| `mysql-connector-python` | 9.1.0 | Připojení k MySQL databázi |
+| `mysql-connector-python` | 9.1.0 | Připojení k MySQL databázi (volitelné) |
 | `python-dotenv` | 1.0.1 | Načítání proměnných ze souboru `.env` |
+| `pypdf` | 5.1.0 | Extrakce textu z PDF souborů (volitelné) |
 
 ---
 
-### Krok 3 – Konfigurace přístupu k databázi
+### Krok 3 – Konfigurace
 
 ```bash
 # Zkopírujte šablonu
 cp .env.example .env
 ```
 
-Poté otevřete `.env` a vyplňte přístupové údaje k vaší MySQL databázi:
+Poté otevřete `.env` a nakonfigurujte **alespoň jeden zdroj dat**:
 
 ```ini
-# MySQL přístupové údaje
+# ── ZDROJ 1: MySQL databáze (volitelné) ─────────────────────────────────────
+# Ponechte DB_NAME prázdné, pokud MySQL nepoužíváte.
 DB_HOST=127.0.0.1
 DB_PORT=3306
 DB_USER=root
 DB_PASSWORD=vase_heslo
 DB_NAME=jmeno_vasi_databaze
 
-# Složka pro lokální vektorovou databázi (relativní cesta od data-vectorizer/)
-CHROMA_DB_DIR=./chroma_db
+# ── ZDROJ 2: PDF / HTML soubory (volitelné) ──────────────────────────────────
+# Nastavte cestu ke složce se soubory. Ponechte prázdné, pokud soubory nepoužíváte.
+# Příklad pro lokální vývoj: FILES_DIR=./files
+FILES_DIR=
+
+# ── ChromaDB ─────────────────────────────────────────────────────────────────
+# Lokální vývoj (bez Dockeru): ../chat-api/chroma_db
+# Docker Compose: ./chroma_db
+CHROMA_DB_DIR=../chat-api/chroma_db
+CHROMA_COLLECTION=chatbot_data
+EMBEDDING_MODEL=intfloat/multilingual-e5-small
 ```
+
+> [!IMPORTANT]
+> Musí být nastaven **alespoň jeden** ze zdrojů (`DB_NAME` nebo `FILES_DIR`). Pokud jsou nastaveny oba, data se sloučí a vektorizují dohromady.
 
 > [!CAUTION]
 > Soubor `.env` obsahuje hesla a nesmí být nikdy commitován do Gitu. Je správně přidán do `.gitignore`.
 
 ---
 
-### Krok 4 – Spuštění ETL procesu (vektorizace)
+### Krok 4 – Příprava souborů (pouze pro zdroj PDF/HTML)
+
+Vložte PDF nebo HTML soubory do složky definované v `FILES_DIR` (např. `./files`). Soubory mohou být uspořádány do podsložek – skript je projde rekurzivně.
+
+```
+data-vectorizer/
+└── files/
+    ├── dokumenty/
+    │   ├── prijimacirizeni.pdf
+    │   └── skolni-rad.pdf
+    └── stranky/
+        └── o-skole.html
+```
+
+> [!TIP]
+> ID každého souboru je odvozeno z jeho relativní cesty. Přejmenování nebo přesunutí souboru = nový záznam v databázi.
+
+---
+
+### Krok 5 – Spuštění ETL procesu (vektorizace)
 
 ```bash
 python main.py
@@ -158,25 +199,27 @@ python main.py
 
 Při prvním spuštění proběhne stahování AI modelu `multilingual-e5-small` ze serverů HuggingFace (**~100–300 MB**). Při dalších spuštěních se model načte z lokální cache.
 
-**Výstup úspěšného spuštění vypadá přibližně takto:**
+**Příklad výstupu při použití obou zdrojů:**
 ```
 ==================================================
-Spouštím vektorizaci databáze pro AI Chatbota
+Spouštím vektorizaci pro AI Chatbota
 ==================================================
 Připojování k databázi...
 Stahuji hlavní obsah článků...
-Stahuji moduly článků...
-Stahuji moduly stránek...
+...
 Úspěšně extrahováno celkem 87 záznamů.
+[files] Načteno: dokumenty/prijimacirizeni.pdf (pdf)
+[files] Načteno: dokumenty/skolni-rad.pdf (pdf)
+[files] Načteno: stranky/o-skole.html (html_file)
+[files] Celkem načteno 3 souborů.
+Celkem zdrojů ke zpracování: 90 (DB: 87, soubory: 3)
 Čištění textu a chunking (rozdělování na bloky)...
-Transformace dokončena. Z původních 87 záznamů vzniklo 214 chunků.
-Připravuji uložení 214 záznamů do vektorové databáze...
-Kontroluji existující záznamy v databázi...
-  Přidávám 214 nových záznamů...
-Generuji vektory (embeddings) a ukládám do databáze... (Toto může chvíli trvat)
+Transformace dokončena. Z původních 90 záznamů vzniklo 231 chunků.
+Připravuji uložení 231 záznamů do vektorové databáze...
+  Přidávám 231 nových záznamů...
 Uložení dokončeno!
 ==================================================
-Vektorizace úspěšně dokončena za 47.23 sekund!
+Vektorizace úspěšně dokončena za 52.41 sekund!
 ==================================================
 ```
 
@@ -216,17 +259,25 @@ ID modulu: article_42
 
 ## Popis jednotlivých souborů
 
-### `extract.py` – Extrakce dat z MySQL
+### `extract.py` – Extrakce dat
 
+Obsahuje dvě nezávislé funkce:
+
+#### `extract_data()` — MySQL zdroj
 Načítá obsah z databáze přes tři SQL dotazy:
 
 1. **Hlavní obsah článků** (`cms_article`) – perex + obsah publikovaných článků
 2. **WYSIWYG moduly článků** (`cms_article_module`, `cms_article_module_data`) – rozšířený obsah z modulů
 3. **WYSIWYG moduly stránek** (`cms_page`, `cms_box`, `cms_box_data`) – obsah stránek
 
-Každý záznam obsahuje unikátní `id`, zdrojovou `url` a surový `content` (může obsahovat HTML tagy).
-
 Schéma databázových tabulek je zdokumentováno v [`db-structure.md`](./db-structure.md).
+
+#### `extract_files()` — PDF / HTML zdroj
+Rekurzivně prochází složku `FILES_DIR` a extrahuje text z:
+- **`.pdf`** – pomocí `pypdf`, stránka po stránce
+- **`.html` / `.htm`** – surové HTML předané do `transform.py`, kde ho `BeautifulSoup` vyčistí
+
+ID každého souboru je stabilní MD5 hash relativní cesty → bezpečný upsert (opakované spuštění nepřidává duplikáty).
 
 ---
 
@@ -268,23 +319,23 @@ Překryv (`chunk_overlap`) zajišťuje, že pokud je odpověď na dotaz na rozhr
 
 ### `main.py` – Orchestrátor ETL
 
-Minimalistický skript, který spouští celý řetězec:
+Skript automaticky detekuje, které zdroje jsou nakonfigurovány, a spustí jen ty aktivní:
 
 ```python
-raw_data = extract_data()    # 1. MySQL → surová data
-chunks = transform_data()    # 2. Čištění + chunking
-load_to_chroma(chunks)       # 3. Vektorizace + ChromaDB
+db_enabled    = bool(os.getenv("DB_NAME"))    # MySQL → extract_data()
+files_enabled = bool(os.getenv("FILES_DIR"))  # Soubory → extract_files()
 ```
 
-Obsahuje měření celkového času a jasné výstupy do konzole pro každou fázi.
+Pokud není nastaven ani jeden zdroj, skript srozumitelně upozorní a skončí.
 
 ---
 
 ## Opakované spuštění a re-index
 
 Skript lze spustit opakovaně:
-- **Nové záznamy** z databáze jsou automaticky přidány
+- **Nové záznamy** z libovolného zdroje jsou automaticky přidány
 - **Změněný obsah** (stejné ID) je aktualizován
+- **Přejmenované nebo přesunuté soubory** dostanou nové ID → vzniknou jako nové záznamy (staré zůstanou v DB)
 
 Pokud potřebujete **úplný reset** (smazání a nové naplnění celé databáze):
 
