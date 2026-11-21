@@ -1,6 +1,7 @@
 <?php
 // server/api.php
 require_once __DIR__ . '/config.php';
+set_time_limit(BOT_API_TIMEOUT + 10);
 
 session_start();
 
@@ -33,6 +34,7 @@ if (isset($_SESSION['last_request_time'])) {
     }
 }
 $_SESSION['last_request_time'] = time();
+session_write_close();
 
 // Get the raw POST data
 $rawData = file_get_contents("php://input");
@@ -73,12 +75,10 @@ if (isset($data['message'])) {
     
     if ($response === false || $httpCode !== 200) {
         error_log("Bot API Curl Error: " . curl_error($ch));
-        curl_close($ch);
         http_response_code(500);
         echo json_encode(["error" => "Omlouváme se, chatbot je momentálně nedostupný."]);
         exit();
     }
-    curl_close($ch);
 
     // Bot API vrací přesně {"response": "Bot říká: ..."}
     $responseData = json_decode($response, true);
