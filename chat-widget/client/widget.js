@@ -83,10 +83,76 @@
         }
     });
 
+    /**
+     * Lightweight Markdown → HTML renderer pre odpovede agenta (Gemma 4).
+     * Podporuje: nadpisy, tučný text, kurzívu, inline kód, blokový kód, zoznamy, zalomenia riadkov.
+     * Bezpečnostné opatrenie: pred konverziou sa všetok text escapuje.
+     */
+    function markdownToHtml(md) {
+        // 1. Escape HTML špeciálnych znakov (bezpečnosť)
+        const escaped = md
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+
+        // 2. Blokový kód (``` ... ```) – spracujeme pred inline pravidlami
+        let html = escaped.replace(/```[\w]*\n?([\s\S]*?)```/g, (_, code) =>
+            `<pre><code>${code.trimEnd()}</code></pre>`
+        );
+
+        // 3. Nadpisy (### ## #)
+        html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+        html = html.replace(/^## (.+)$/gm,  '<h2>$1</h2>');
+        html = html.replace(/^# (.+)$/gm,   '<h1>$1</h1>');
+
+        // 4. Tučný + kurzíva kombinované (***text***)
+        html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+        // 5. Tučný (**text** alebo __text__)
+        html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        html = html.replace(/__(.+?)__/g,     '<strong>$1</strong>');
+        // 6. Kurzíva (*text* alebo _text_)
+        html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+        html = html.replace(/_([^_]+?)_/g,   '<em>$1</em>');
+
+        // 7. Inline kód (`kód`)
+        html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+        // 8. Nečíslovaný zoznam (riadky začínajúce „- " alebo „* ")
+        html = html.replace(/(^[ \t]*[-*] .+(\n|$))+/gm, (block) => {
+            const items = block.trim().split('\n').map(line =>
+                `<li>${line.replace(/^[ \t]*[-*] /, '')}</li>`
+            ).join('');
+            return `<ul>${items}</ul>`;
+        });
+
+        // 9. Číslovaný zoznam (riadky začínajúce číslom a bodkou)
+        html = html.replace(/(^[ \t]*\d+\. .+(\n|$))+/gm, (block) => {
+            const items = block.trim().split('\n').map(line =>
+                `<li>${line.replace(/^[ \t]*\d+\. /, '')}</li>`
+            ).join('');
+            return `<ol>${items}</ol>`;
+        });
+
+        // 10. Jednoduché zalomenia riadkov → <br> (mimo <pre> blokov)
+        // Rozdelíme podľa <pre> a spracujeme len časti mimo kódu
+        html = html.split(/(<pre>[\s\S]*?<\/pre>)/g).map((part, i) => {
+            if (i % 2 === 1) return part; // <pre> blok – nemenný
+            return part.replace(/\n/g, '<br>');
+        }).join('');
+
+        return html;
+    }
+
     function appendMessage(text, sender) {
         const msgDiv = document.createElement('div');
         msgDiv.className = `chatbot-message ${sender}`;
-        msgDiv.textContent = text;
+        if (sender === 'agent') {
+            msgDiv.innerHTML = markdownToHtml(text);
+        } else {
+            // Používateľské správy – čistý text (bezpečnosť)
+            msgDiv.textContent = text;
+        }
         messagesEl.appendChild(msgDiv);
         messagesEl.scrollTop = messagesEl.scrollHeight;
     }
